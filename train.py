@@ -7,33 +7,37 @@ from collections import OrderedDict
 from datetime import datetime
 
 import numpy as np
-from tensorboardX import SummaryWriter
-from tqdm import tqdm
-import oyaml
-from attrdict import AttrDict
-from termcolor import colored
 from matplotlib import pyplot as plt
 from PIL import Image
+from PIL.ImageMath import eval
+from tqdm import tqdm
+
+import imgaug as ia
+import oyaml
 # PyTorch includes
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from torchvision.utils import make_grid
-from imgaug import augmenters as iaa
-import imgaug as ia
-
+from attrdict import AttrDict
 # Custom includes
 from dataloaders import utils
 from dataloaders.alphapilot import AlphaPilotSegmentation
+from imgaug import augmenters as iaa
 # from dataloaders import custom_transforms as tr
 from networks import deeplab_resnet, deeplab_xception, unet
+from tensorboardX import SummaryWriter
+from termcolor import colored
+from torch.utils.data import DataLoader
+from torchvision import transforms
+from torchvision.utils import make_grid
 
+# from inference import labels
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-b", "--batch_size", required=True, type=int, help="Num of images per batch for training")
-args = parser.parse_args()
+# from train import labels
+
+# parser = argparse.ArgumentParser()
+# parser.add_argument("-b", "--batch_size", required=True, type=int, help="Num of images per batch for training")
+# args = parser.parse_args()
 
 ###################### Load Config File #############################
 CONFIG_FILE_PATH = 'config/config.yaml'
@@ -45,8 +49,8 @@ print(colored('Config being used for training:\n{}\n\n'.format(oyaml.dump(config
 
 
 # Setting parameters
-nEpochs = 66  # Number of epochs for training
-resume_epoch = 54   # Default is 0, change if want to resume
+nEpochs = 100  # Number of epochs for training
+resume_epoch = 0  # Default is 0, change if want to resume
 
 
 p = OrderedDict()  # Parameters to include in report
@@ -180,28 +184,28 @@ if resume_epoch != nEpochs:
 
     augs_train = iaa.Sequential([
         # Geometric Augs
-        iaa.Resize((imsize, imsize), 0),
-        iaa.Fliplr(0.5),
-        iaa.Flipud(0.5),
-        iaa.Rot90((0, 4)),
+        iaa.Resize((imsize, imsize), 0)
+        # iaa.Fliplr(0.5),
+        # iaa.Flipud(0.5),
+        # iaa.Rot90((0, 4)),
 
-        # Blur and Noise
-        iaa.Sometimes(0.10, iaa.OneOf([iaa.GaussianBlur(sigma=(1.5, 2.5), name="gaus_blur"),
-                                    iaa.MotionBlur(k=13, angle=[0, 180, 270, 360], direction=[-1.0, 1.0],
-                                                    name='motion_blur'),
-                                    ])),
+        # # Blur and Noise
+        # iaa.Sometimes(0.10, iaa.OneOf([iaa.GaussianBlur(sigma=(1.5, 2.5), name="gaus_blur"),
+        #                             iaa.MotionBlur(k=13, angle=[0, 180, 270, 360], direction=[-1.0, 1.0],
+        #                                             name='motion_blur'),
+        #                             ])),
 
-        # Color, Contrast, etc
-        iaa.Sometimes(0.30, iaa.CoarseDropout(0.05, size_px=(2, 4), per_channel=0.5, min_size=2, name='dropout')),
+        # # Color, Contrast, etc
+        # iaa.Sometimes(0.30, iaa.CoarseDropout(0.05, size_px=(2, 4), per_channel=0.5, min_size=2, name='dropout')),
 
-        iaa.SomeOf((0, None), [ iaa.Sometimes(0.15, iaa.GammaContrast((0.5, 1.5), name="contrast")),
-                                iaa.Sometimes(0.15, iaa.Multiply((0.40, 1.60), per_channel=1.0, name="multiply")),
-                                iaa.Sometimes(0.15, iaa.AddToHueAndSaturation((-30, 30), name="hue_sat")),
-                            ]),
+        # iaa.SomeOf((0, None), [ iaa.Sometimes(0.15, iaa.GammaContrast((0.5, 1.5), name="contrast")),
+        #                         iaa.Sometimes(0.15, iaa.Multiply((0.40, 1.60), per_channel=1.0, name="multiply")),
+        #                         iaa.Sometimes(0.15, iaa.AddToHueAndSaturation((-30, 30), name="hue_sat")),
+        #                     ]),
 
-        # Affine
-        iaa.Sometimes(0.10, iaa.Affine(scale={"x": (0.5, 0.7), "y": 1.0})),
-        iaa.Sometimes(0.10, iaa.Affine(scale=(0.5, 0.7))),
+        # # Affine
+        # iaa.Sometimes(0.10, iaa.Affine(scale={"x": (0.5, 0.7), "y": 1.0})),
+        # iaa.Sometimes(0.10, iaa.Affine(scale=(0.5, 0.7))),
     ])
 
     augs_test = iaa.Sequential([
@@ -209,32 +213,31 @@ if resume_epoch != nEpochs:
         iaa.Resize((imsize, imsize), interpolation='cubic'),
     ])
 
-    db_train = AlphaPilotSegmentation(
-        input_dir='data/dataset/train/images', label_dir='data/dataset/train/labels',
-        transform=augs_train,
-        input_only=["gaus_blur", "motion_blur", "dropout", "contrast", "multiply",  "hue_sat"]
-    )
+    # db_train = AlphaPilotSegmentation(
+    #     input_dir=config.train.datasets.images, label_dir=config.train.datasets.labels,
+    #     transform=augs_train,
+    #     input_only=["gaus_blur", "motion_blur", "dropout", "contrast", "multiply",  "hue_sat"]
+    # )
     db_train_list = []
     for dataset in config.train.datasets:
-        db = dataloader.SurfaceNormalsDataset(input_dir=dataset.images, label_dir=dataset.labels,
+        db = AlphaPilotSegmentation(input_dir=dataset.images, label_dir=dataset.labels,
                                               transform=augs_train, input_only=None)
         train_size = int(config.train.percentageDataForTraining * len(db))
         db = torch.utils.data.Subset(db, range(train_size))
         db_train_list.append(db)
 
-db_train = torch.utils.data.ConcatDataset(db_train_list)
+    db_train = torch.utils.data.ConcatDataset(db_train_list)
 
-    db_validation = AlphaPilotSegmentation(
-        input_dir='data/dataset/val/images', label_dir='data/dataset/val/labels',
-        transform=augs_test,
-        input_only=None
-    )
-
-    db_test = AlphaPilotSegmentation(
-        input_dir='data/dataset/test/images', label_dir='data/dataset/test/labels',
-        transform=augs_test,
-        input_only=None
-    )
+    for dataset in config.eval.datasetsSynthetic:
+        db_validation = AlphaPilotSegmentation(
+            input_dir=dataset.images, label_dir=dataset.labels,
+            transform=augs_train,
+            input_only=None
+        )
+    db_test_list = []
+    for dataset in config.eval.datasetsReal:
+        db_test = AlphaPilotSegmentation(input_dir=dataset.images, transform=augs_test, input_only=None)
+        db_test_list.append(db_test)
 
     print('size db_train, db_val: ', len(db_train), len(db_validation))
 
@@ -385,14 +388,14 @@ for epoch in range(resume_epoch, nEpochs):
                         print('Loss: %f' % running_loss_val)
                         print('MIoU: %f\n' % miou)
                         running_loss_val = 0
-
-                        # Show 10 * 3 images results each epoch
-                        img_tensor = (inputs[:3].clone().cpu().data)
-                        output_tensor = utils.decode_seg_map_sequence(torch.max(outputs[:3], 1)[1].detach().cpu().numpy()).type(torch.FloatTensor)
-                        label_tensor = utils.decode_seg_map_sequence(torch.squeeze(labels[:3], 1).detach().cpu().numpy()).type(torch.FloatTensor)
+                        print(inputs.shape)
+                        # Show 10 * 2 images results each epoch
+                        img_tensor = (inputs[:2].clone().cpu().data)
+                        output_tensor = utils.decode_seg_map_sequence(torch.max(outputs[:2], 1)[1].detach().cpu().numpy()).type(torch.FloatTensor)
+                        label_tensor = utils.decode_seg_map_sequence(torch.squeeze(labels[:2], 1).detach().cpu().numpy()).type(torch.FloatTensor)
 
                         images_list = []
-                        for i in range (0,3):
+                        for i in range (0,2):
                             images_list.append(img_tensor[i])
                             images_list.append(output_tensor[i])
                             images_list.append(label_tensor[i])
